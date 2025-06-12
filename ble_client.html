@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>BLE Serial Monitor</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+<div class="container py-4">
+    <h1 class="mb-4">BLE Serial Monitor</h1>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <button id="btnConnect" class="btn btn-primary">Connect to BLE</button>
+            <div id="deviceInfo" class="mt-2"></div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Serial Settings</div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-6">
+                    <label class="form-label">Baud Rate</label>
+                    <select id="baudRate" class="form-select">
+                        <option>9600</option>
+                        <option>19200</option>
+                        <option>38400</option>
+                        <option selected>115200</option>
+                        <option>921600</option>
+                    </select>
+                </div>
+                <div class="col-md-6 align-self-end">
+                    <button id="btnSetSpeed" class="btn btn-warning">Apply Speed</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-header">Data Transfer</div>
+        <div class="card-body">
+            <div class="mb-3">
+                <textarea id="terminal" class="form-control" rows="6" readonly></textarea>
+            </div>
+            <div class="input-group">
+                <input type="text" id="inputData" class="form-control" placeholder="Send data...">
+                <button id="btnSend" class="btn btn-success">Send</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const UUIDS = {
+        SERVICE: "93b1eb81-430d-4456-b97d-80ba7ac20fc4",
+        SPEED: "950ddf3e-050a-4cc3-b9bd-fea5c013b7e9",
+        DATA: "5a9b8290-0be7-4078-a503-c7a728cf2106"
+    };
+
+    let bluetoothDevice;
+    let dataCharacteristic;
+    let terminal = document.getElementById('terminal');
+
+    // Подключение к устройству
+    document.getElementById('btnConnect').addEventListener('click', async () => {
+        try {
+            bluetoothDevice = await navigator.bluetooth.requestDevice({
+                filters: [{ name: 'ESP32-BLE-Serial' }],
+                optionalServices: [UUIDS.SERVICE]
+            });
+
+            const server = await bluetoothDevice.gatt.connect();
+            const service = await server.getPrimaryService(UUIDS.SERVICE);
+
+            // Получаем характеристики
+            dataCharacteristic = await service.getCharacteristic(UUIDS.DATA);
+            await dataCharacteristic.startNotifications();
+
+            dataCharacteristic.addEventListener('characteristicvaluechanged', event => {
+                const decoder = new TextDecoder();
+                const value = decoder.decode(event.target.value);
+                terminal.value += '<< ' + value + '\n';
+                terminal.scrollTop = terminal.scrollHeight;
+            });
+
+            updateDeviceInfo(`Connected: ${bluetoothDevice.name}`);
+        } catch (error) {
+            console.error(error);
+            updateDeviceInfo(`Error: ${error.message}`);
+        }
+    });
+
+    // Установка скорости UART
+    document.getElementById('btnSetSpeed').addEventListener('click', async () => {
+        if (!bluetoothDevice?.gatt.connected) {
+            updateDeviceInfo('Device not connected!');
+            return;
+        }
+
+        try {
+            const speed = parseInt(document.getElementById('baudRate').value);
+            const buffer = new ArrayBuffer(4);
+            const view = new DataView(buffer);
+            view.setUint32(0, speed, true);
+
+            const service = await bluetoothDevice.gatt.getPrimaryService(UUIDS.SERVICE);
+            const characteristic = await service.getCharacteristic(UUIDS.SPEED);
+            await characteristic.writeValue(view);
+
+            terminal.value += `[Speed set to ${speed}]\n`;
+        } catch (error) {
+            console.error(error);
+            terminal.value += `[Error setting speed: ${error.message}]\n`;
+        }
+    });
+
+    // Отправка данных
+    document.getElementById('btnSend').addEventListener('click', async () => {
+        const input = document.getElementById('inputData');
+        const text = input.value.trim();
+
+        if (text && bluetoothDevice?.gatt.connected) {
+            try {
+                const encoder = new TextEncoder();
+                await dataCharacteristic.writeValue(encoder.encode(text + '\n'));
+                terminal.value += `>> ${text}\n`;
+                input.value = '';
+                terminal.scrollTop = terminal.scrollHeight;
+            } catch (error) {
+                console.error(error);
+                terminal.value += `[Send error: ${error.message}]\n`;
+            }
+        }
+    });
+
+    function updateDeviceInfo(message) {
+        document.getElementById('deviceInfo').textContent = message;
+    }
+</script>
+</body>
+</html>
